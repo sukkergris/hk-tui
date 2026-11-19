@@ -5,10 +5,12 @@
 # Playback runs in hk-cast, a small daemon per speaker that keeps the Cast connection, serves the files and plays
 # the queue; this script talks to it with curl over a unix socket.
 # The UI calls itself (_show/_enter/_key/_tracks/_preview/_now/_ticker) from fzf key bindings and the ticker loop.
-# Rows (fields separated by TAB):
-#   albums:   Artist ‒ Album (Year) <TAB> dir  (relative to the music dir; from the first track's tags)
-#   tracks:   ▶ Title   <TAB> file (relative to the music dir)
-#   speakers: ▶ Name ‒ IP <TAB> IP
+# Rows (fzf fields separated by TAB or " ‒ " (U+2012), so artist and album are searchable separately; the last
+# field, {-1}, is always the key):
+#   albums:   Artist ‒ Album (Year)     <TAB> dir  (relative to the music dir; from the first track's tags)
+#   tracks:   ▶ Title <TAB> (empty)     <TAB> file (relative to the music dir)
+#   songs:    ▶ Title ‒ Artist • Album  <TAB> file (all tracks, for the track search)
+#   speakers: ▶ Name ‒ IP               <TAB> IP
 set -euo pipefail
 (( BASH_VERSINFO[0] >= 5 )) || { echo "hk needs bash >= 5" >&2; exit 1; }
 self=$(readlink -f "${BASH_SOURCE[0]}")
@@ -107,7 +109,20 @@ albums() {
         IFS=$'\t' read -r m a y b <<<"${known[$rel]-}"
         printf '%s\t%s\t%s\t%s\t%s\n' "$([[ -n $a ]] && echo 0 || echo 1)" "$a" "${y:-9999}" "${b:-${rel##*/}}" "$rel"
     done | sort -t$'\t' -k1,1n -k2,2f -k3,3n -k4,4f |  # albums without an artist tag last, then the loose files
-        awk -F'\t' '{ t = ($2 == "" ? $4 : $2 " ‒ " $4); if ($3 != 9999) t = t " (" $3 ")"; print t "\t" $5 }'
+        awk -F'\t' '{ t = ($2 == "" ? "(unknown)" : $2) " ‒ " $4; if ($3 != 9999) t = t " (" $3 ")"; print t "\t" $5 }'
+}
+songs() {  # all tracks as "Title ‒ Artist • Album<TAB>file", in album order (for the track search)
+    local cur row dir f rel
+    cur=$(ctl current 2>/dev/null || true)
+    while IFS=$'\t' read -r row dir; do
+        while IFS= read -r f; do
+            rel=$f
+            [[ $dir != . ]] && rel=$dir/$f
+            row=${row% (*}  # "Artist ‒ Album"
+            if [[ $rel == "$cur" ]]; then printf '\e[1;32m▶ %s ‒ %s • %s\e[0m\t%s\n' "${f%.*}" "${row%% ‒ *}" "${row#* ‒ }" "$rel"
+            else printf '  %s ‒ %s • %s\t%s\n' "${f%.*}" "${row%% ‒ *}" "${row#* ‒ }" "$rel"; fi
+        done < <(find -L "$music/$dir" -maxdepth 1 -type f -regextype posix-extended -iregex ".*\.($ext)" -printf '%f\n' | sort -V)
+    done <"$HK_DIR/albums"
 }
 tracks() {  # $1 = dir; the track playing is green
     local cur f rel
@@ -116,7 +131,7 @@ tracks() {  # $1 = dir; the track playing is green
         while IFS= read -r f; do
             rel=$f
             [[ -n $1 && $1 != . ]] && rel=$1/$f
-            if [[ $rel == "$cur" ]]; then printf '\e[1;32m▶ %s\e[0m\t%s\n' "${f%.*}" "$rel"; else printf '  %s\t%s\n' "${f%.*}" "$rel"; fi
+            if [[ $rel == "$cur" ]]; then printf '\e[1;32m▶ %s\e[0m\t\t%s\n' "${f%.*}" "$rel"; else printf '  %s\t\t%s\n' "${f%.*}" "$rel"; fi
         done
 }
 
@@ -164,19 +179,28 @@ speakers() {  # ▶ = the chosen one
 # Views: print fzf actions. The label is set last with "action:text", so parentheses in names don't break it.
 bold() { local t=${1//\[ /$'\e[1m'[ }; echo "${t// \]/ ]$'\e[22m'}"; }  # the current tab, "[ … ]", in bold
 label() { echo "change-border-label: $app │ $(st name) │ $(bold "$1") "; }
+scope() { local s; s=$(st scope); echo "${s:-album}"; }  # what / searches: album, artist or track (tab switches)
+nth() { if [[ $(scope) == artist ]]; then echo 1; else echo 2; fi; }
 to_albums() {  # $1 = action after reload (pos or first)
     put tab albums
-    echo "reload-sync($self _show albums)+$1+change-prompt(album> )+change-preview-window(right,45%)+$(label '[ Albums (ga) ]  Tracks  Speakers (gS)')"
+    echo "reload-sync($self _show albums)+$1+change-nth($(nth))+change-prompt($(scope)> )+change-preview-window(right,45%)+$(label '[ Albums (ga) ]  Tracks  Speakers (gS)')"
 }
-to_tracks() {  # $1 = album, $2 = dir, $3 = index in the album list
-    put tab tracks; put dir "$2"; put apos "$3"
-    echo "clear-query+reload-sync($self _tracks)+first+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ $1 ]  Speakers (gS)")"
+to_tracks() {  # $1 = artist, $2 = album, $3 = dir, $4 = index in the album list
+    put tab tracks; put dir "$3"; put apos "$4"
+    echo "clear-query+reload-sync($self _tracks)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ ${1#  } – $2 ]  Speakers (gS)")"
+}
+to_songs() {  # the track search: all tracks, searched by title
+    put tab songs
+    echo "reload($self _show songs)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ All tracks ]  Speakers (gS)")"
 }
 to_speakers() {
     put tab speakers
-    echo "clear-query+reload($self _show speakers)+first+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums (ga)  Tracks  [ Speakers (gS) ]')"
+    echo "clear-query+reload($self _show speakers)+first+change-nth(1)+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums (ga)  Tracks  [ Speakers (gS) ]')"
 }
-back_to_albums() { echo "clear-query+$(to_albums "pos($(($(st apos) + 1)))")"; }
+back_to_albums() {
+    [[ $(scope) == track ]] && put scope album
+    echo "clear-query+$(to_albums "pos($(($(st apos) + 1)))")"
+}
 
 usage() {
     cat <<EOF
@@ -216,7 +240,7 @@ case "${1:-}" in
         list=$(for p; do
             r=$(realpath -m --relative-to="$music" "$p")
             [[ $r != ../* ]] || { echo "hk: $p is not inside $music" >&2; exit 1; }
-            if [[ -d $p ]]; then tracks "$r" | cut -f2; else echo "$r"; fi
+            if [[ -d $p ]]; then tracks "$r" | cut -f3; else echo "$r"; fi
         done)
         player; ctl queue --data-binary @- <<<"$list" >/dev/null; exit ;;
     pause | next | prev | stop) player; ctl "$1" >/dev/null; exit ;;
@@ -233,6 +257,7 @@ case "${1:-}" in
     _now) ctl now; exit ;;
     _show)  # $2 = albums or speakers; built the first time (with progress in the status line), then printed
         f=$HK_DIR/$2
+        [[ $2 == songs ]] && { busy "Listing all tracks…"; songs; exit; }  # fresh each time (▶ on the one playing)
         if [[ ! -e $f ]]; then
             case $2 in
                 albums) albums >"$f.tmp" ;;
@@ -246,11 +271,16 @@ case "${1:-}" in
         exit ;;
     _tracks) tracks "$(st dir)"; exit ;;
     _preview) [[ $(st tab) == albums ]] && tracks "$2" | cut -f1; exit 0 ;;
-    _enter)  # $2 = {2}: dir, file or IP; $3 = {n}
+    _enter)  # $2 = {-1}: dir, file or IP; $3 = {n}
         [[ -n ${2:-} ]] || exit 0
         case $(st tab) in
-            albums) tracks "$2" | cut -f2 | ctl queue --data-binary @- >/dev/null ;;
-            tracks) tracks "$(st dir)" | cut -f2 | ctl "queue?start=$3" --data-binary @- >/dev/null ;;
+            albums) tracks "$2" | cut -f3 | ctl queue --data-binary @- >/dev/null ;;
+            tracks) tracks "$(st dir)" | cut -f3 | ctl "queue?start=$3" --data-binary @- >/dev/null ;;
+            songs)  # the album of the track, from that track
+                d=${2%/*}; [[ $2 == */* ]] || d=.
+                list=$(tracks "$d" | cut -f3)
+                i=$(grep -nxF "$2" <<<"$list" | cut -d: -f1)
+                ctl "queue?start=$((${i:-1} - 1))" --data-binary @- <<<"$list" >/dev/null ;;
             speakers)
                 put host "$2"; HK_HOST=$2; save_config
                 put name "$(name "$(info "$2")")"; rm -f "$HK_DIR/speakers"
@@ -261,7 +291,13 @@ case "${1:-}" in
         esac
         echo "refresh-preview+transform-footer($self _now)"
         exit ;;
-    _key)  # $2 = key, $3-$5 = {1} {2} {n}. g waits 1 s for the next key (gg, gt, gT).
+    _scope)  # tab: search album → artist → track (all tracks) → album; the query is kept
+        case $(scope) in album) put scope artist ;; artist) put scope track ;; *) put scope album ;; esac
+        if [[ $(scope) == track ]]; then to_songs
+        elif [[ $(st tab) == albums ]]; then echo "change-nth($(nth))+change-prompt($(scope)> )"
+        else to_albums first; fi
+        exit ;;
+    _key)  # $2 = key, $3-$6 = {1} {2} {-1} {n}. g waits 1 s for the next key (gg, gt, gT).
         tab=$(st tab) g=$(st g) ms=${EPOCHREALTIME/[.,]/} ms=${ms%???} pending=0
         (( ms - ${g:-0} < 1000 )) && pending=1
         put g 0
@@ -270,11 +306,11 @@ case "${1:-}" in
             g1) echo first ;;
             a1) [[ $tab != albums ]] && back_to_albums ;;  # ga, gS: straight to a tab
             S1) [[ $tab != speakers ]] && to_speakers ;;
-            t1) case $tab in albums) to_tracks "$3" "$4" "$5" ;; tracks) to_speakers ;; *) back_to_albums ;; esac ;;
+            t1) case $tab in albums) to_tracks "$3" "$4" "$5" "$6" ;; tracks | songs) to_speakers ;; *) back_to_albums ;; esac ;;
             T1) case $tab in albums) to_speakers ;; *) back_to_albums ;; esac ;;
-            l?) [[ $tab == albums ]] && to_tracks "$3" "$4" "$5" ;;
+            l?) [[ $tab == albums ]] && to_tracks "$3" "$4" "$5" "$6" ;;
             h?) [[ $tab != albums ]] && back_to_albums ;;
-            r?) [[ $tab != tracks ]] && { rm -f "$HK_DIR/$tab"; echo "reload($self _show $tab)"; } ;;  # albums: read changed folders again
+            r?) [[ $tab == @(albums|speakers) ]] && { rm -f "$HK_DIR/$tab"; echo "reload($self _show $tab)"; } ;;  # albums: read changed folders again
         esac
         exit 0 ;;
     _ticker)  # status line every 0.12 s (spinner); "now playing" every ~1 s, and the preview / track list when the track changes
@@ -308,7 +344,7 @@ echo "$(date +%T) UI started (pid $$, $app)" >>"$uilog"
 trap 'e=$?; echo "$(date +%T) UI exited (status $e)" >>"$uilog"; rm -rf "$HK_DIR"' EXIT
 trap 'exit 129' HUP; trap 'exit 143' TERM  # e.g. the terminal closed: still clean up and log it
 player
-put host "$HK_HOST"; put name "$(name "$(info "$HK_HOST")")"; put tab albums; put apos 0
+put host "$HK_HOST"; put name "$(name "$(info "$HK_HOST")")"; put tab albums; put scope album; put apos 0
 "$self" _ticker &
 trap 'e=$?; echo "$(date +%T) UI exited (status $e)" >>"$uilog"; kill $! 2>/dev/null; rm -rf "$HK_DIR"' EXIT  # hk-cast keeps playing
 
@@ -317,22 +353,23 @@ help='j/k  ctrl-d/u  gg/G   move · half page · top/bottom
 l/h                   albums ⇄ tracks
 gt/gT                 tabs: albums → tracks → speakers
 ga  gS                go to: albums · speakers
-/  esc                search · back
+/  tab  esc           search · cycle album/artist/track · back
 enter                 play album / from track · choose speaker
 space  n/p  +/-       pause · next/previous · volume
 r                     albums: read changed folders again · speakers: scan network
 ?  q                  shortcuts · quit'
-key="transform($self _key {k} {1} {2} {n})"
+key="transform($self _key {k} {1} {2} {-1} {n})"
 fzf --listen="$HK_DIR/fzf.sock" --no-input --ansi \
-    --delimiter='\t' --with-nth=1 --prompt 'album> ' \
+    --delimiter=$'\t| ‒ ' --with-nth=1,2 --nth=2 --prompt 'album> ' \
     --layout=reverse --border --border-label " $app │ $(st name) │ $(bold '[ Albums (ga) ]  Tracks  Speakers (gS)') " \
     --header "$help" --footer ' ' --footer-border=top --footer-label ' Press ? for shortcuts ' \
     --bind "start:reload($self _show albums)+toggle-header,?:toggle-header" \
-    --preview "$self _preview {2}" --preview-window=right,45% \
+    --preview "$self _preview {-1}" --preview-window=right,45% \
     --bind 'j:down,k:up,G:last,q:abort,ctrl-d:half-page-down,ctrl-u:half-page-up' \
     --bind "g:${key//\{k\}/g},t:${key//\{k\}/t},T:${key//\{k\}/T},h:${key//\{k\}/h},l:${key//\{k\}/l},r:${key//\{k\}/r}" \
     --bind "a:${key//\{k\}/a},S:${key//\{k\}/S}" \
-    --bind "enter:transform($self _enter {2} {n})" \
+    --bind "enter:transform($self _enter {-1} {n})" \
+    --bind "tab:transform($self _scope)" \
     --bind "space:execute-silent($self pause)+transform-footer($self _now)" \
     --bind "n:execute-silent($self next)+refresh-preview" \
     --bind "p:execute-silent($self prev)+refresh-preview" \

@@ -59,10 +59,13 @@ hk use <IP>        # switch speaker and save it in the config
 | `gt` · `gT` | tabs: albums → tracks → speakers |
 | `ga` · `gS` | go to: albums · speakers |
 | `/` · `esc` | search · back |
+| `tab` | search by album → artist → track (all tracks) |
 | `enter` | play album / play from track · choose speaker |
 | `space` · `n` · `p` · `+` · `-` | pause · next · previous · volume |
 | `r` | albums: read changed folders again · speakers: scan the network |
 | `?` · `q` | shortcuts · quit (playback continues) |
+
+`/` searches the album list; `tab` switches what it searches, like in bluos: **album** names, **artist** names, or **track** titles (a list of all tracks, `Title ‒ Artist • Album`). `enter` on a track plays its album from that track.
 
 ## Config
 
