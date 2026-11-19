@@ -1,6 +1,6 @@
 # Maintainer: sukkergris
 pkgname=hk-tui-git
-pkgver=r6.542b4a2
+pkgver=r9.9a0c3ee
 pkgrel=1
 pkgdesc='Terminal client for Chromecast speakers, e.g. Harman Kardon Citation (unofficial)'
 arch=(any)
