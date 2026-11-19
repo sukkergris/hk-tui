@@ -17,9 +17,9 @@ cd ~/Code/hk-tui
 ./install.sh         # installs the dependencies, hk and hk-cast to /usr/bin
 ```
 
-Update or reinstall: `~/Code/hk-tui/install.sh` (runs `git pull` and `makepkg -sif`; it builds what is pushed to GitHub, not local changes)
-Development: `./dev.sh` copies the local `bin/hk` and `bin/hk-cast` to `/usr/bin`, uncommitted changes included (needs `sudo pacman -S python-pychromecast` once). Run `./install.sh` to go back to the packaged version.
+Update: `~/Code/hk-tui/install.sh`. It pulls the latest version from GitHub, builds the package and installs it with pacman. Restart the player daemon afterwards, so it runs the new code: `pkill -f hk-cast` (the next `hk` command starts it again; the song playing finishes, but the queue stops until then).
 Uninstall: `sudo pacman -R hk-tui-git`
+Changing the code? See [Development](#development).
 
 ### First run
 
@@ -77,6 +77,30 @@ music=/home/you/Music
 - **Library:** every folder with audio files (mp3, flac, m4a, aac, ogg, opus, wav) is an album; track names are the file names.
 - **Speakers:** found by asking every address on the /24 network for `http://<IP>:8008/setup/eureka_info`, which Cast devices answer with their name.
 - **UI:** the script calls itself (`_enter`, `_key`, `_tracks`, `_preview`, `_now`, …) from fzf key bindings. State lives in `$XDG_RUNTIME_DIR/hk-ui-<pid>/`. A ticker updates the footer every second through fzf's `--listen` socket.
+
+## Development
+
+Two scripts install the app. Users only need `install.sh`; `dev.sh` is for trying changes.
+
+| Script | Installs | Use it when |
+|---|---|---|
+| `./install.sh` | the package built from what is **pushed to GitHub** (`git pull`, `makepkg -sf`, `pacman -U`). pacman owns the files, and `pacman -Q hk-tui-git` shows the version. | you use the app, and after you have pushed a change |
+| `./dev.sh` | your **working copy**: copies `bin/hk` and `bin/hk-cast` straight to `/usr/bin` with `sudo install`, uncommitted changes included. Needs `sudo pacman -S python-pychromecast` once. | you want to try a change before committing it |
+
+A typical change:
+
+1. Edit `bin/hk` and `bin/hk-cast`.
+2. Try it: run `bin/hk` from the repo (nothing installed), or `./dev.sh` to have it as `hk` everywhere.
+3. Commit and push.
+4. `./install.sh` puts the packaged version back. It takes over the files `dev.sh` copied (`pacman -U --overwrite`); without that, pacman refuses with "exists in filesystem".
+
+Good to know:
+
+- `makepkg` writes the new `pkgver` (e.g. `r6.cce9dd8`) into `PKGBUILD`. Commit it as `chore: opdater pkgver fra makepkg`.
+- After `./dev.sh`, `pacman -Qkk hk-tui-git` reports the files as modified. That is expected until the next `./install.sh`.
+- Version bump: change `app="hk X.Y.Z"` in `bin/hk`, commit, add an annotated tag `vX.Y.Z` and push with `git push --follow-tags`.
+- **Restart the daemon** after `./dev.sh` or `./install.sh`: `pkill -f hk-cast`. A running `hk-cast` keeps the old code until it quits.
+- **Test runs talk to the real daemon.** There is one daemon per speaker, found by its socket (`$XDG_RUNTIME_DIR/hk-<IP>.sock`), so `bin/hk` from the repo controls the same queue as the installed one. Check `hk status` before testing, and use another config (`XDG_CONFIG_HOME=/tmp/test-config`) with a speaker nobody listens to.
 
 ## License
 
