@@ -183,19 +183,19 @@ scope() { local s; s=$(st scope); echo "${s:-album}"; }  # what / searches: albu
 nth() { if [[ $(scope) == artist ]]; then echo 1; else echo 2; fi; }
 to_albums() {  # $1 = action after reload (pos or first)
     put tab albums
-    echo "reload-sync($self _show albums)+$1+change-nth($(nth))+change-prompt($(scope)> )+change-preview-window(right,45%)+$(label '[ Albums (ga) ]  Tracks  Speakers (gS)')"
+    echo "reload-sync($self _show albums)+$1+change-nth($(nth))+change-prompt($(scope)> )+change-preview-window(right,45%)+$(label '[ Music (gm) ]  Tracks  Speakers (gS)')"
 }
 to_tracks() {  # $1 = artist, $2 = album, $3 = dir, $4 = index in the album list
     put tab tracks; put dir "$3"; put apos "$4"
-    echo "clear-query+reload-sync($self _tracks)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ ${1#  } – $2 ]  Speakers (gS)")"
+    echo "clear-query+reload-sync($self _tracks)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Music (gm)  [ ${1#  } – $2 ]  Speakers (gS)")"
 }
 to_songs() {  # the track search: all tracks, searched by title
     put tab songs
-    echo "reload($self _show songs)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ All tracks ]  Speakers (gS)")"
+    echo "reload($self _show songs)+first+change-nth(1)+change-prompt(track> )+change-preview-window(hidden)+$(label "Music (gm)  [ All tracks ]  Speakers (gS)")"
 }
 to_speakers() {
     put tab speakers
-    echo "clear-query+reload($self _show speakers)+first+change-nth(1)+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums (ga)  Tracks  [ Speakers (gS) ]')"
+    echo "clear-query+reload($self _show speakers)+first+change-nth(1)+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Music (gm)  Tracks  [ Speakers (gS) ]')"
 }
 back_to_albums() {
     [[ $(scope) == track ]] && put scope album
@@ -304,7 +304,7 @@ case "${1:-}" in
         case "$2$pending" in
             g0) put g "$ms" ;;
             g1) echo first ;;
-            a1) [[ $tab != albums ]] && back_to_albums ;;  # ga, gS: straight to a tab
+            m1) [[ $tab != albums ]] && back_to_albums ;;  # gm, gS: straight to a tab
             S1) [[ $tab != speakers ]] && to_speakers ;;
             t1) case $tab in albums) to_tracks "$3" "$4" "$5" "$6" ;; tracks | songs) to_speakers ;; *) back_to_albums ;; esac ;;
             T1) case $tab in albums) to_speakers ;; *) back_to_albums ;; esac ;;
@@ -348,26 +348,26 @@ put host "$HK_HOST"; put name "$(name "$(info "$HK_HOST")")"; put tab albums; pu
 "$self" _ticker &
 trap 'e=$?; echo "$(date +%T) UI exited (status $e)" >>"$uilog"; kill $! 2>/dev/null; rm -rf "$HK_DIR"' EXIT  # hk-cast keeps playing
 
-keys='j,k,g,G,h,l,t,T,r,a,S,space,n,p,+,-,q,/,?'
+keys='j,k,g,G,h,l,t,T,r,m,S,space,n,p,+,-,q,/,?'
 help='j/k  ctrl-d/u  gg/G   move · half page · top/bottom
-l/h                   albums ⇄ tracks
-gt/gT                 tabs: albums → tracks → speakers
-ga  gS                go to: albums · speakers
+l/h                   music ⇄ tracks
+gt/gT                 tabs: music → tracks → speakers
+gm  gS                go to: music · speakers
 /  tab  esc           search · cycle album/artist/track · back
 enter                 play album / from track · choose speaker
 space  n/p  +/-       pause · next/previous · volume
-r                     albums: read changed folders again · speakers: scan network
+r                     music: read changed folders again · speakers: scan network
 ?  q                  shortcuts · quit'
 key="transform($self _key {k} {1} {2} {-1} {n})"
 fzf --listen="$HK_DIR/fzf.sock" --no-input --ansi \
     --delimiter=$'\t| ‒ ' --with-nth=1,2 --nth=2 --prompt 'album> ' \
-    --layout=reverse --border --border-label " $app │ $(st name) │ $(bold '[ Albums (ga) ]  Tracks  Speakers (gS)') " \
+    --layout=reverse --border --border-label " $app │ $(st name) │ $(bold '[ Music (gm) ]  Tracks  Speakers (gS)') " \
     --header "$help" --footer ' ' --footer-border=top --footer-label ' Press ? for shortcuts ' \
     --bind "start:reload($self _show albums)+toggle-header,?:toggle-header" \
     --preview "$self _preview {-1}" --preview-window=right,45% \
     --bind 'j:down,k:up,G:last,q:abort,ctrl-d:half-page-down,ctrl-u:half-page-up' \
     --bind "g:${key//\{k\}/g},t:${key//\{k\}/t},T:${key//\{k\}/T},h:${key//\{k\}/h},l:${key//\{k\}/l},r:${key//\{k\}/r}" \
-    --bind "a:${key//\{k\}/a},S:${key//\{k\}/S}" \
+    --bind "m:${key//\{k\}/m},S:${key//\{k\}/S}" \
     --bind "enter:transform($self _enter {-1} {n})" \
     --bind "tab:transform($self _scope)" \
     --bind "space:execute-silent($self pause)+transform-footer($self _now)" \

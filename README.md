@@ -34,7 +34,7 @@ hk                    # opens the UI
 - **"no answer from speaker at <IP>":** the speaker is off, or it got a new IP from DHCP. Run `hk scan` and `hk use <IP>`. To keep the IP fixed, reserve it in your router's DHCP. Use the MAC address the network actually sees: `ip neigh show <speaker IP>`.
 - **"the player did not start":** see the log it names, `$XDG_RUNTIME_DIR/hk-<IP>.log`. Usually `python-pychromecast` is missing.
 - **A red `! …` in the status line:** errors from the UI are logged in `$XDG_RUNTIME_DIR/hk-ui.log` (which call, line and command), together with when the UI started and exited; the newest is shown in the status line for 15 s.
-- **An album in the wrong place:** the order comes from the tags of its first track (album artist, year, album). Fix the tags, then press `r` on the Albums tab.
+- **An album in the wrong place:** the order comes from the tags of its first track (album artist, year, album). Fix the tags, then press `r` on the Music tab.
 - **The speaker starts a track but plays nothing:** the speaker fetches the files from this computer over HTTP on a random port. A firewall must allow incoming connections from the LAN.
 - **fzf error about unknown options (`--no-input`, `--footer`):** your fzf is older than 0.63.
 
@@ -55,14 +55,14 @@ hk use <IP>        # switch speaker and save it in the config
 | Key | Action |
 |---|---|
 | `j` · `k` · `ctrl-d` · `ctrl-u` · `gg` · `G` | move · half page · top / bottom |
-| `l` · `h` | albums ⇄ tracks |
-| `gt` · `gT` | tabs: albums → tracks → speakers |
-| `ga` · `gS` | go to: albums · speakers |
+| `l` · `h` | music ⇄ tracks |
+| `gt` · `gT` | tabs: music → tracks → speakers |
+| `gm` · `gS` | go to: music · speakers |
 | `/` · `esc` | search · back |
 | `tab` | search by album → artist → track (all tracks) |
 | `enter` | play album / play from track · choose speaker |
 | `space` · `n` · `p` · `+` · `-` | pause · next · previous · volume |
-| `r` | albums: read changed folders again · speakers: scan the network |
+| `r` | music: read changed folders again · speakers: scan the network |
 | `?` · `q` | shortcuts · quit (playback continues) |
 
 `/` searches the album list; `tab` switches what it searches, like in bluos: **album** names, **artist** names, or **track** titles (a list of all tracks, `Title ‒ Artist • Album`). `enter` on a track plays its album from that track.
