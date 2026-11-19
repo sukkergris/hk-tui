@@ -95,16 +95,16 @@ speakers() {  # ▶ = the chosen one
 label() { echo "change-border-label: $app │ $(st name) │ $1 "; }
 to_albums() {  # $1 = action after reload (pos or first)
     put tab albums
-    echo "reload-sync(cat $HK_DIR/albums)+$1+change-prompt(album> )+change-preview-window(right,45%)+$(label '[ Albums ]  Tracks  Speakers')"
+    echo "reload-sync(cat $HK_DIR/albums)+$1+change-prompt(album> )+change-preview-window(right,45%)+$(label '[ Albums (ga) ]  Tracks  Speakers (gS)')"
 }
 to_tracks() {  # $1 = album, $2 = dir, $3 = index in the album list
     put tab tracks; put dir "$2"; put apos "$3"
-    echo "clear-query+reload-sync($self _tracks)+first+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums  [ $1 ]  Speakers")"
+    echo "clear-query+reload-sync($self _tracks)+first+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums (ga)  [ $1 ]  Speakers (gS)")"
 }
 to_speakers() {
     put tab speakers
     [[ -s $HK_DIR/speakers ]] || speakers >"$HK_DIR/speakers"
-    echo "clear-query+reload-sync(cat $HK_DIR/speakers)+first+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums  Tracks  [ Speakers ]')"
+    echo "clear-query+reload-sync(cat $HK_DIR/speakers)+first+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums (ga)  Tracks  [ Speakers (gS) ]')"
 }
 back_to_albums() { echo "clear-query+$(to_albums "pos($(($(st apos) + 1)))")"; }
 
@@ -232,7 +232,7 @@ r                     speakers: scan network
 key="transform($self _key {k} {1} {2} {n})"
 fzf <"$HK_DIR/albums" --listen="$HK_DIR/fzf.sock" --no-input --ansi \
     --delimiter='\t' --with-nth=1 --prompt 'album> ' \
-    --layout=reverse --border --border-label " $app │ $(st name) │ [ Albums ]  Tracks  Speakers " \
+    --layout=reverse --border --border-label " $app │ $(st name) │ [ Albums (ga) ]  Tracks  Speakers (gS) " \
     --header "$help" --footer ' ' --footer-border=top --footer-label ' Press ? for shortcuts ' \
     --bind 'start:toggle-header,?:toggle-header' \
     --preview "$self _preview {2}" --preview-window=right,45% \
