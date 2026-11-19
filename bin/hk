@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# hk – terminal client for Chromecast speakers (made for a Harman Kardon Citation): the albums in ~/Music in fzf
+# with vim keys, "now playing" in the footer. Unofficial; not affiliated with Google or Harman Kardon.
+#
+# Playback runs in hk-cast, a small daemon per speaker that keeps the Cast connection, serves the files and plays
+# the queue; this script talks to it with curl over a unix socket.
+# The UI calls itself (_enter/_key/_tracks/_preview/_now/_ticker) from fzf key bindings and the ticker loop.
+# Rows (fields separated by TAB):
+#   albums:   Album     <TAB> dir  (relative to the music dir)
+#   tracks:   ▶ Title   <TAB> file (relative to the music dir)
+#   speakers: ▶ Name ‒ IP <TAB> IP
+set -euo pipefail
+(( BASH_VERSINFO[0] >= 5 )) || { echo "hk needs bash >= 5" >&2; exit 1; }
+self=$(readlink -f "${BASH_SOURCE[0]}")
+app="hk 0.1.0"  # name and version shown at the top of the UI
+
+# Config: host=<speaker IP>, music=<music dir> (default ~/Music)
+config=${XDG_CONFIG_HOME:-$HOME/.config}/hk/config
+host="" music=$HOME/Music
+# shellcheck source=/dev/null
+[[ -f $config ]] && source "$config"
+HK_HOST=${HK_HOST:-$host}
+music=${music%/}
+save_config() { mkdir -p "${config%/*}"; printf 'host=%s\nmusic=%s\n' "$HK_HOST" "$music" >"$config"; }
+run=${XDG_RUNTIME_DIR:-/tmp}
+ext='mp3|flac|m4a|aac|ogg|opus|wav'
+
+# --- Speakers ---
+
+info() { curl -s --connect-timeout 1 --max-time 2 "http://$1:8008/setup/eureka_info"; }  # Cast device info (JSON)
+name() { local n; n=$(grep -oE '"name":"[^"]*"' <<<"$1" | cut -d'"' -f4); printf '%b' "$n"; }  # ø → ø
+local_ip() { ip -4 -o route get 1.1.1.1 | grep -oE 'src [0-9.]+' | cut -d' ' -f2; }
+
+# Cast speakers on the local network ("IP Name"); assumes a /24 network
+scan() {
+    local net
+    net=$(local_ip)
+    net=${net%.*}
+    for i in {1..254}; do
+        (s=$(info "$net.$i") && [[ -n $s ]] && echo "$net.$i $(name "$s")") &
+    done
+    wait
+}
+
+# --- Player daemon (hk-cast) ---
+
+ctl() { curl -sf --max-time 5 --unix-socket "$run/hk-$HK_HOST.sock" "http://hk/$1" "${@:2}"; }
+player() {  # start hk-cast for the speaker unless it is running
+    ctl ping &>/dev/null && return
+    info "$HK_HOST" >/dev/null || {
+        echo "hk: no answer from speaker at $HK_HOST. If its IP changed, run 'hk scan' and 'hk use <IP>'" >&2
+        return 1
+    }
+    echo "Connecting to $HK_HOST…" >&2
+    setsid "${self%/*}/hk-cast" "$HK_HOST" "$music" "$run/hk-$HK_HOST.sock" </dev/null &>"$run/hk-$HK_HOST.log" &
+    for _ in {1..50}; do ctl ping &>/dev/null && return; sleep 0.2; done
+    echo "hk: the player did not start; see $run/hk-$HK_HOST.log" >&2
+    return 1
+}
+
+# --- Library ---
+
+albums() {  # folders with audio files: "Album<TAB>dir"
+    find -L "$music" -type f -regextype posix-extended -iregex ".*\.($ext)" -printf '%h\n' | sort -fu |
+        while IFS= read -r d; do
+            d=${d#"$music"} d=${d#/}
+            printf '%s\t%s\n' "${d:-(loose files)}" "${d:-.}"
+        done
+}
+tracks() {  # $1 = dir; the track playing is green
+    local cur f rel
+    cur=$(ctl current 2>/dev/null || true)
+    find -L "$music/$1" -maxdepth 1 -type f -regextype posix-extended -iregex ".*\.($ext)" -printf '%f\n' | sort -V |
+        while IFS= read -r f; do
+            rel=$f
+            [[ -n $1 && $1 != . ]] && rel=$1/$f
+            if [[ $rel == "$cur" ]]; then printf '\e[1;32m▶ %s\e[0m\t%s\n' "${f%.*}" "$rel"; else printf '  %s\t%s\n' "${f%.*}" "$rel"; fi
+        done
+}
+
+# --- UI ---
+
+st()  { cat "$HK_DIR/$1" 2>/dev/null || true; }  # read state
+put() { echo "$2" >"$HK_DIR/$1"; }
+# The chosen speaker is kept in state, so all sub-calls follow along when it changes
+[[ -n ${HK_DIR:-} && -s ${HK_DIR:-}/host ]] && read -r HK_HOST <"$HK_DIR/host"
+
+speakers() {  # ▶ = the chosen one
+    scan | sort -t. -k4,4n | while read -r ip n; do
+        if [[ $ip == "$HK_HOST" ]]; then printf '▶ %s ‒ %s\t%s\n' "$n" "$ip" "$ip"; else printf '  %s ‒ %s\t%s\n' "$n" "$ip" "$ip"; fi
+    done
+}
+
+# Views: print fzf actions. The label is set last with "action:text", so parentheses in names don't break it.
+label() { echo "change-border-label: $app │ $(st name) │ $1 "; }
+to_albums() {  # $1 = action after reload (pos or first)
+    put tab albums
+    echo "reload-sync(cat $HK_DIR/albums)+$1+change-prompt(album> )+change-preview-window(right,45%)+$(label '[ Albums ]  Tracks  Speakers')"
+}
+to_tracks() {  # $1 = album, $2 = dir, $3 = index in the album list
+    put tab tracks; put dir "$2"; put apos "$3"
+    echo "clear-query+reload-sync($self _tracks)+first+change-prompt(track> )+change-preview-window(hidden)+$(label "Albums  [ $1 ]  Speakers")"
+}
+to_speakers() {
+    put tab speakers
+    [[ -s $HK_DIR/speakers ]] || speakers >"$HK_DIR/speakers"
+    echo "clear-query+reload-sync(cat $HK_DIR/speakers)+first+change-prompt(speaker> )+change-preview-window(hidden)+$(label 'Albums  Tracks  [ Speakers ]')"
+}
+back_to_albums() { echo "clear-query+$(to_albums "pos($(($(st apos) + 1)))")"; }
+
+usage() {
+    cat <<EOF
+$app – terminal client for Chromecast speakers (unofficial)
+
+Usage: hk [command]
+
+  (none)          open the UI
+  play PATH...    play files or album folders (inside the music dir)
+  pause           pause / resume
+  next | prev     next / previous track
+  stop            stop playback
+  vol [N|+N|-N]   show or set volume
+  status          show what is playing
+  scan            list Cast speakers on the local network
+  use IP          switch to the speaker at IP and save it
+
+Config: $config (host=, music=)
+EOF
+}
+
+case "${1:-}" in
+    help | -h | --help) usage; exit ;;
+    scan) scan | sort -t. -k4,4n; exit ;;
+    use)
+        [[ -n ${2:-} ]] || { echo "Usage: hk use <IP>" >&2; exit 1; }
+        s=$(info "$2") || { echo "hk: no Cast speaker answers at $2" >&2; exit 1; }
+        HK_HOST=$2; save_config
+        echo "Using $(name "$s") at $HK_HOST (saved in $config)"; exit ;;
+esac
+[[ -n $HK_HOST ]] || { echo "hk: no speaker chosen. Find one with 'hk scan' and pick it with 'hk use <IP>'" >&2; exit 1; }
+
+case "${1:-}" in
+    play)
+        [[ -n ${2:-} ]] || { echo "Usage: hk play PATH..." >&2; exit 1; }
+        shift
+        list=$(for p; do
+            r=$(realpath -m --relative-to="$music" "$p")
+            [[ $r != ../* ]] || { echo "hk: $p is not inside $music" >&2; exit 1; }
+            if [[ -d $p ]]; then tracks "$r" | cut -f2; else echo "$r"; fi
+        done)
+        player; ctl queue --data-binary @- <<<"$list" >/dev/null; exit ;;
+    pause | next | prev | stop) player; ctl "$1" >/dev/null; exit ;;
+    vol)
+        player
+        case ${2:-} in
+            "") ctl vol; echo ;;
+            [+-]*) ctl "vol?delta=${2#+}" >/dev/null ;;
+            *) ctl "vol?set=$2" >/dev/null ;;
+        esac
+        exit ;;
+    status) player; ctl now; echo; exit ;;
+    # Internal sub-calls from fzf
+    _now) ctl now; exit ;;
+    _tracks) tracks "$(st dir)"; exit ;;
+    _preview) [[ $(st tab) == albums ]] && tracks "$2" | cut -f1; exit 0 ;;
+    _enter)  # $2 = {2}: dir, file or IP; $3 = {n}
+        case $(st tab) in
+            albums) tracks "$2" | cut -f2 | ctl queue --data-binary @- >/dev/null ;;
+            tracks) tracks "$(st dir)" | cut -f2 | ctl "queue?start=$3" --data-binary @- >/dev/null ;;
+            speakers)
+                put host "$2"; HK_HOST=$2; save_config
+                put name "$(name "$(info "$2")")"; rm -f "$HK_DIR/speakers"
+                player 2>/dev/null || true
+                back_to_albums; exit ;;
+        esac
+        echo "refresh-preview+transform-footer($self _now)"
+        exit ;;
+    _key)  # $2 = key, $3-$5 = {1} {2} {n}. g waits 1 s for the next key (gg, gt, gT).
+        tab=$(st tab) g=$(st g) ms=${EPOCHREALTIME/[.,]/} ms=${ms%???} pending=0
+        (( ms - ${g:-0} < 1000 )) && pending=1
+        put g 0
+        case "$2$pending" in
+            g0) put g "$ms" ;;
+            g1) echo first ;;
+            t1) case $tab in albums) to_tracks "$3" "$4" "$5" ;; tracks) to_speakers ;; *) back_to_albums ;; esac ;;
+            T1) case $tab in albums) to_speakers ;; *) back_to_albums ;; esac ;;
+            l?) [[ $tab == albums ]] && to_tracks "$3" "$4" "$5" ;;
+            h?) [[ $tab != albums ]] && back_to_albums ;;
+            r?) [[ $tab == speakers ]] && { speakers >"$HK_DIR/speakers"; echo "reload-sync(cat $HK_DIR/speakers)"; } ;;
+        esac
+        exit 0 ;;
+    _ticker)  # update the footer every second; when the track changes, also the preview and track list
+        last=""
+        while sleep 1; do
+            read -r HK_HOST <"$HK_DIR/host" || true
+            np=$(ctl now) || continue
+            cur=$(ctl current) || true
+            act="change-footer:$np"
+            if [[ $cur != "$last" ]]; then
+                act="refresh-preview+$act"
+                [[ $(st tab) == tracks ]] && act="track-current+reload($self _tracks)+$act"
+            fi
+            curl -s --unix-socket "$HK_DIR/fzf.sock" -XPOST http://localhost -d "$act" >/dev/null && last=$cur || true
+        done ;;
+    "") ;;
+    *) usage >&2; exit 1 ;;
+esac
+
+export HK_DIR="$run/hk-ui-$$"
+mkdir -p "$HK_DIR"
+trap 'rm -rf "$HK_DIR"' EXIT
+player
+put host "$HK_HOST"; put name "$(name "$(info "$HK_HOST")")"; put tab albums; put apos 0
+echo "Reading $music…" >&2
+albums >"$HK_DIR/albums"
+[[ -s $HK_DIR/albums ]] || { echo "hk: no audio files in $music; set music= in $config" >&2; exit 1; }
+"$self" _ticker &
+trap 'kill $! 2>/dev/null; rm -rf "$HK_DIR"' EXIT  # the ticker stops with the UI; hk-cast keeps playing
+
+keys='j,k,g,G,h,l,t,T,r,space,n,p,+,-,q,/,?'
+help='j/k  ctrl-d/u  gg/G   move · half page · top/bottom
+l/h                   albums ⇄ tracks
+gt/gT                 tabs: albums → tracks → speakers
+/  esc                search · back
+enter                 play album / from track · choose speaker
+space  n/p  +/-       pause · next/previous · volume
+r                     speakers: scan network
+?  q                  shortcuts · quit'
+key="transform($self _key {k} {1} {2} {n})"
+fzf <"$HK_DIR/albums" --listen="$HK_DIR/fzf.sock" --no-input --ansi \
+    --delimiter='\t' --with-nth=1 --prompt 'album> ' \
+    --layout=reverse --border --border-label " $app │ $(st name) │ [ Albums ]  Tracks  Speakers " \
+    --header "$help" --footer ' ' --footer-border=top --footer-label ' Press ? for shortcuts ' \
+    --bind 'start:toggle-header,?:toggle-header' \
+    --preview "$self _preview {2}" --preview-window=right,45% \
+    --bind 'j:down,k:up,G:last,q:abort,ctrl-d:half-page-down,ctrl-u:half-page-up' \
+    --bind "g:${key//\{k\}/g},t:${key//\{k\}/t},T:${key//\{k\}/T},h:${key//\{k\}/h},l:${key//\{k\}/l},r:${key//\{k\}/r}" \
+    --bind "enter:transform($self _enter {2} {n})" \
+    --bind "space:execute-silent($self pause)+transform-footer($self _now)" \
+    --bind "n:execute-silent($self next)+refresh-preview" \
+    --bind "p:execute-silent($self prev)+refresh-preview" \
+    --bind "+:execute-silent($self vol +5)+transform-footer($self _now)" \
+    --bind "-:execute-silent($self vol -5)+transform-footer($self _now)" \
+    --bind "/:show-input+unbind($keys)" \
+    --bind "esc:hide-input+rebind($keys)"

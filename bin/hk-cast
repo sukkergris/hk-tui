@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""hk-cast – player daemon for hk. Unofficial; not affiliated with Google or Harman Kardon.
+
+Keeps the Cast connection open, serves the queued files to the speaker over HTTP and plays the queue track by track.
+Control API: HTTP over a unix socket (curl --unix-socket):
+  GET  /ping /now /current /pause /next /prev /stop /vol[?set=N | ?delta=N]
+  POST /queue?start=N   body: file paths relative to the music dir, one per line
+Quits after 30 min without playback. Usage: hk-cast <speaker IP> <music dir> <socket>
+"""
+import mimetypes
+import os
+import socket
+import socketserver
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+
+import pychromecast
+
+host, music, sock = sys.argv[1:4]
+IDLE_EXIT = 30 * 60
+
+cast = pychromecast.get_chromecast_from_host((host, 8009, None, None, None))
+cast.wait()
+mc = cast.media_controller
+lock = threading.Lock()
+queue, pos = [], -1
+advance = threading.Event()  # set by the status listener; the main loop plays the next track
+
+
+# --- File server: only the queued files, so the music dir isn't open to the whole LAN ---
+
+class Files(SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k):
+        super().__init__(*a, directory=music, **k)
+
+    def send_head(self):
+        if unquote(urlsplit(self.path).path).lstrip("/") not in queue:
+            self.send_error(404)
+            return None
+        return super().send_head()
+
+    def log_message(self, *a):
+        pass
+
+
+files = ThreadingHTTPServer(("", 0), Files)
+threading.Thread(target=files.serve_forever, daemon=True).start()
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:  # our IP on the speaker's network
+    u.connect((host, 8009))
+    base = f"http://{u.getsockname()[0]}:{files.server_port}/"
+
+
+# --- Playback ---
+
+def play(i):
+    global pos
+    pos = i
+    f = queue[i]
+    mc.play_media(base + quote(f), mimetypes.guess_type(f)[0] or "audio/mpeg",
+                  metadata={"metadataType": 3, "title": Path(f).stem, "albumName": Path(f).parent.name})
+
+
+def ours():  # is the speaker playing from our queue (and not e.g. Spotify)?
+    return (mc.status.content_id or "").startswith(base)
+
+
+class Listener:
+    def new_media_status(self, st):
+        if st.player_state == "IDLE" and st.idle_reason == "FINISHED" and (st.content_id or "").startswith(base):
+            advance.set()
+
+    def load_media_failed(self, item, code):
+        print(f"load failed: {code}", file=sys.stderr)
+
+
+mc.register_status_listener(Listener())
+
+
+def mmss(s):
+    return f"{int(s) // 60}:{int(s) % 60:02d}"
+
+
+def now():  # "now playing" for the footer
+    st, cs = mc.status, cast.status
+    icon = {"PLAYING": "▶", "BUFFERING": "▶", "PAUSED": "⏸"}.get(st.player_state, "■")
+    app = cs.display_name if cs and cs.display_name != "Default Media Receiver" else ""
+    out = [f"{icon} {st.title or app or ''}", f"  {st.album_name or st.artist or ''}"]
+    if st.duration:
+        t = st.adjusted_current_time or 0
+        n = int(30 * t / st.duration)
+        out.append(f"  {mmss(t)} {'━' * n}{'─' * (30 - n)} {mmss(st.duration)}")
+    v = round((cs.volume_level if cs else 0) * 100)
+    bar = "".join(c if v >= i * 10 - 5 else "·" for i, c in enumerate("▁▂▃▃▄▅▅▆▇█", 1))
+    out.append(f"  {'mute' if cs and cs.volume_muted else 'vol'} {bar} {v}")
+    return "\n".join(out)
+
+
+def volume(q):
+    v = round(cast.status.volume_level * 100)
+    if "set" in q:
+        v = int(q["set"])
+    elif "delta" in q:
+        v += int(q["delta"])
+    v = max(0, min(100, v))
+    if q:
+        cast.set_volume(v / 100)
+    return str(v)
+
+
+def step(d):
+    if queue and 0 <= pos + d < len(queue):
+        play(pos + d)
+
+
+def toggle():
+    mc.pause() if mc.status.player_state == "PLAYING" else mc.play()
+
+
+def stop():
+    global queue, pos
+    mc.stop()
+    queue, pos = [], -1
+
+
+commands = {
+    "ping": lambda q: "ok",
+    "now": lambda q: now(),
+    "current": lambda q: queue[pos] if queue and ours() else "",
+    "vol": volume,
+    "pause": lambda q: toggle(),
+    "next": lambda q: step(1),
+    "prev": lambda q: step(-1),
+    "stop": lambda q: stop(),
+}
+
+
+# --- Control server on the unix socket ---
+
+class Ctl(BaseHTTPRequestHandler):
+    def reply(self, code, text):
+        b = (text or "").encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        u = urlsplit(self.path)
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        cmd = commands.get(u.path.strip("/"))
+        if not cmd:
+            return self.reply(404, "unknown command\n")
+        with lock:
+            self.reply(200, cmd(q))
+
+    def do_POST(self):  # /queue
+        global queue
+        start = int(parse_qs(urlsplit(self.path).query).get("start", ["0"])[0])
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        items = [line for line in body.splitlines() if line]
+        if not items:
+            return self.reply(400, "empty queue\n")
+        with lock:
+            queue = items
+            play(min(start, len(queue) - 1))
+        self.reply(200, "")
+
+    def address_string(self):
+        return "hk"
+
+    def log_message(self, *a):
+        pass
+
+
+class CtlServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+if os.path.exists(sock):
+    os.unlink(sock)
+ctl = CtlServer(sock, Ctl)
+threading.Thread(target=ctl.serve_forever, daemon=True).start()
+
+try:
+    active = time.monotonic()
+    while True:
+        if advance.wait(1):
+            advance.clear()
+            with lock:
+                step(1)
+        if mc.status.player_state in ("PLAYING", "BUFFERING"):
+            active = time.monotonic()
+        elif time.monotonic() - active > IDLE_EXIT:
+            break
+finally:
+    os.unlink(sock)
+    cast.disconnect()
