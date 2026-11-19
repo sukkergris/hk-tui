@@ -55,6 +55,7 @@ hk use <IP>        # switch speaker and save it in the config
 | `j` · `k` · `ctrl-d` · `ctrl-u` · `gg` · `G` | move · half page · top / bottom |
 | `l` · `h` | albums ⇄ tracks |
 | `gt` · `gT` | tabs: albums → tracks → speakers |
+| `ga` · `gS` | go to: albums · speakers |
 | `/` · `esc` | search · back |
 | `enter` | play album / play from track · choose speaker |
 | `space` · `n` · `p` · `+` · `-` | pause · next · previous · volume |

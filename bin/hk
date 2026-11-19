@@ -182,6 +182,8 @@ case "${1:-}" in
         case "$2$pending" in
             g0) put g "$ms" ;;
             g1) echo first ;;
+            a1) [[ $tab != albums ]] && back_to_albums ;;  # ga, gS: straight to a tab
+            S1) [[ $tab != speakers ]] && to_speakers ;;
             t1) case $tab in albums) to_tracks "$3" "$4" "$5" ;; tracks) to_speakers ;; *) back_to_albums ;; esac ;;
             T1) case $tab in albums) to_speakers ;; *) back_to_albums ;; esac ;;
             l?) [[ $tab == albums ]] && to_tracks "$3" "$4" "$5" ;;
@@ -217,10 +219,11 @@ albums >"$HK_DIR/albums"
 "$self" _ticker &
 trap 'kill $! 2>/dev/null; rm -rf "$HK_DIR"' EXIT  # the ticker stops with the UI; hk-cast keeps playing
 
-keys='j,k,g,G,h,l,t,T,r,space,n,p,+,-,q,/,?'
+keys='j,k,g,G,h,l,t,T,r,a,S,space,n,p,+,-,q,/,?'
 help='j/k  ctrl-d/u  gg/G   move · half page · top/bottom
 l/h                   albums ⇄ tracks
 gt/gT                 tabs: albums → tracks → speakers
+ga  gS                go to: albums · speakers
 /  esc                search · back
 enter                 play album / from track · choose speaker
 space  n/p  +/-       pause · next/previous · volume
@@ -235,6 +238,7 @@ fzf <"$HK_DIR/albums" --listen="$HK_DIR/fzf.sock" --no-input --ansi \
     --preview "$self _preview {2}" --preview-window=right,45% \
     --bind 'j:down,k:up,G:last,q:abort,ctrl-d:half-page-down,ctrl-u:half-page-up' \
     --bind "g:${key//\{k\}/g},t:${key//\{k\}/t},T:${key//\{k\}/T},h:${key//\{k\}/h},l:${key//\{k\}/l},r:${key//\{k\}/r}" \
+    --bind "a:${key//\{k\}/a},S:${key//\{k\}/S}" \
     --bind "enter:transform($self _enter {2} {n})" \
     --bind "space:execute-silent($self pause)+transform-footer($self _now)" \
     --bind "n:execute-silent($self next)+refresh-preview" \
