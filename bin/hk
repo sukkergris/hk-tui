@@ -213,7 +213,7 @@ Usage: hk [command]
   pause           pause / resume
   next | prev     next / previous track
   stop            stop playback
-  vol [N|+N|-N]   show or set volume
+  vol [N|+N|-N|+|-] show or set volume (+/-: step 1 below 10, else 3)
   status          show what is playing
   scan            list Cast speakers on the local network
   use IP          switch to the speaker at IP and save it
@@ -258,6 +258,8 @@ case "${1:-}" in
         player
         case ${2:-} in
             "") ctl vol; echo ;;
+            +) v=$(ctl vol); ctl "vol?set=$(( v + (v < 10 ? 1 : 3) ))" >/dev/null ;;   # fine steps at low volume
+            -) v=$(ctl vol); ctl "vol?set=$(( v - (v <= 10 ? 1 : 3) ))" >/dev/null ;;
             [+-]*) ctl "vol?delta=${2#+}" >/dev/null ;;
             *) ctl "vol?set=$2" >/dev/null ;;
         esac
@@ -384,7 +386,7 @@ fzf --listen="$HK_DIR/fzf.sock" --no-input --ansi \
     --bind "space:execute-silent($self pause)+transform-footer($self _now)" \
     --bind "n:execute-silent($self next)+refresh-preview" \
     --bind "p:execute-silent($self prev)+refresh-preview" \
-    --bind "+:execute-silent($self vol +5)+transform-footer($self _now)" \
-    --bind "-:execute-silent($self vol -5)+transform-footer($self _now)" \
+    --bind "+:execute-silent($self vol +)+transform-footer($self _now)" \
+    --bind "-:execute-silent($self vol -)+transform-footer($self _now)" \
     --bind "/:show-input+unbind($keys)" \
     --bind "esc:hide-input+rebind($keys)" </dev/null
