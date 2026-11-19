@@ -1,12 +1,12 @@
 # Maintainer: sukkergris
 pkgname=hk-tui-git
-pkgver=r0
+pkgver=r6.542b4a2
 pkgrel=1
 pkgdesc='Terminal client for Chromecast speakers, e.g. Harman Kardon Citation (unofficial)'
 arch=(any)
 url='https://github.com/sukkergris/hk-tui'
 license=(MIT)
-depends=(bash fzf curl iproute2 python python-pychromecast)
+depends=(bash fzf curl ffmpeg iproute2 python python-pychromecast)
 makedepends=(git)
 provides=(hk-tui)
 conflicts=(hk-tui)
