@@ -26,6 +26,7 @@ Changing the code? See [Development](#development).
 ```bash
 hk scan               # Cast speakers on the network, e.g. "192.168.1.13 Living room"
 hk use 192.168.1.13   # pick one (saved in the config)
+hk music ~/Musik      # only if your music is not in ~/Music
 hk                    # opens the UI
 ```
 
@@ -48,6 +49,7 @@ hk next|prev       # next / previous track
 hk stop            # stop playback
 hk vol [N|+N|-N]   # show or set volume (0–100)
 hk status          # what is playing
+hk music [DIR]     # show or set the music folder (default ~/Music); setting it stops what is playing
 hk scan            # Cast speakers on the local network
 hk use <IP>        # switch speaker and save it in the config
 ```
@@ -69,7 +71,7 @@ hk use <IP>        # switch speaker and save it in the config
 
 ## Config
 
-`~/.config/hk/config` (written by `hk use` and when you choose a speaker in the UI):
+`~/.config/hk/config` (written by `hk use`, `hk music` and when you choose a speaker in the UI):
 
 ```bash
 host=192.168.1.13   # speaker IP; reserve it in your router's DHCP

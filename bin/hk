@@ -217,6 +217,7 @@ Usage: hk [command]
   status          show what is playing
   scan            list Cast speakers on the local network
   use IP          switch to the speaker at IP and save it
+  music [DIR]     show or set the music folder (default ~/Music)
 
 Config: $config (host=, music=)
 EOF
@@ -230,6 +231,13 @@ case "${1:-}" in
         s=$(info "$2") || { echo "hk: no Cast speaker answers at $2" >&2; exit 1; }
         HK_HOST=$2; save_config
         echo "Using $(name "$s") at $HK_HOST (saved in $config)"; exit ;;
+    music)
+        [[ -n ${2:-} ]] || { echo "$music"; exit; }
+        d=$(realpath -e -- "$2" 2>/dev/null) && [[ -d $d ]] || { echo "hk: no folder at $2" >&2; exit 1; }
+        music=$d; save_config
+        # hk-cast serves files from the folder it was started with: stop it, the next play starts it with the new one
+        pkill -f "^python3 [^ ]*/hk-cast " && echo "Stopped the player; it starts again with the new folder"
+        echo "Music folder: $music (saved in $config)"; exit ;;
     "" | play | pause | next | prev | stop | vol | status | _*) ;;
     *) usage >&2; exit 1 ;;  # before the speaker check, so a typo (e.g. "set") is not "no speaker chosen"
 esac
@@ -268,7 +276,7 @@ case "${1:-}" in
             mv "$f.tmp" "$f"
         fi
         if [[ -s $f ]]; then cat "$f"
-        elif [[ $2 == albums ]]; then printf '  No audio files in %s – set music= in %s\t\n' "$music" "$config"
+        elif [[ $2 == albums ]]; then printf '  No audio files in %s – pick your music folder with: hk music <DIR>\t\n' "$music"
         else printf '  No speakers found\t\n'; fi
         exit ;;
     _tracks) tracks "$(st dir)"; exit ;;
